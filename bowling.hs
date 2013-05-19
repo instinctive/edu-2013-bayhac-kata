@@ -1,48 +1,94 @@
 
 module Bowling where
 
-toFrames :: [Int] -> [[Int]]
-toFrames (10:b:c:xs)               = [10,b,c]:toFrames (b:c:xs)
-toFrames ( a:b:c:xs) | a + b == 10 = [ a,b,c]:toFrames (  c:xs)
-                     | otherwise   = [ a,b  ]:toFrames (  c:xs)
-toFrames [10,b] = [[10,b],[b]]
-toFrames xs     = [xs]
+import Control.Monad (liftM2, foldM)
+import Control.Monad.Writer (Writer, runWriter, writer)
+import Data.Char (intToDigit)
+import Text.Printf (printf)
 
-showRoll :: Int -> String
-showRoll 0 = "-"
-showRoll a = show a
+data Roll = Strike | Spare Int | One Int | Two Int deriving (Eq, Show)
 
-showFrame :: [Int] -> String
-showFrame (10:_) = " X"
-showFrame [a] = showRoll a ++ " "
-showFrame (a:b:_) | a + b == 10 = showRoll a ++ "/"
-                  | otherwise   = showRoll a ++ showRoll b
+toRoll :: Roll -> Int -> Roll
+toRoll (One x)  y | x+y == 10 = Spare y
+                  | otherwise = Two y
+toRoll _       10             = Strike
+toRoll _        x             = One x
 
-completeFrame :: [Int] -> Bool
-completeFrame [_,_,_]  = True
-completeFrame [a,b]    = a+b < 10
-completeFrame _        = False
+toRolls :: [Int] -> [Roll]
+toRolls xs = rs where rs = zipWith toRoll (Strike:rs) xs
+                      
+type Frame = [Roll]
 
--- | Score a game represented as a list of the number of pins knocked
--- down by each roll.
+toFrames :: [Roll] -> [Frame]
+toFrames = go 1 where
+  go _ []               = []
+  go 10 rs              = [rs]
+  go n rs@(Strike:_)    = take 3 rs : go (n+1) (drop 1 rs)
+  go n rs@(_:Spare _:_) = take 3 rs : go (n+1) (drop 2 rs)
+  go n rs               = take 2 rs : go (n+1) (drop 2 rs)
+
+rollScore :: Roll -> Int
+rollScore Strike    = 10
+rollScore (Spare x) = x
+rollScore (One x)   = x
+rollScore (Two x)   = x
+
+frameScore :: Frame -> Maybe Int
+frameScore rs@[Strike,_      ,_] = Just $ sum $ map rollScore rs
+frameScore rs@[_     ,Spare _,_] = Just $ sum $ map rollScore rs
+frameScore rs@[One _ ,Two _  ]   = Just $ sum $ map rollScore rs
+frameScore _                     = Nothing
+
+pinChar :: Int -> Char
+pinChar 0 = '-'
+pinChar x = intToDigit x
+
+rollChar :: Roll -> Char
+rollChar Strike    = 'X'
+rollChar (Spare _) = '/'
+rollChar (One x)   = pinChar x
+rollChar (Two x)   = pinChar x
+
+frameText :: Bool -> Frame -> String
+frameText False (Strike:_) = "  |  | X|"
+frameText final rs = printf " %c| %c| %c|" a b c
+  where (a:b:c:_) = if final then cs else ' ' : cs
+        cs = map rollChar rs ++ repeat ' '
+
+type Output = (String, String, String, String, String)
+
+bowlFrame :: (Maybe Int) -> (Bool, Frame) -> Writer Output (Maybe Int)
+bowlFrame score (final, frame) = writer (score', output)
+  where score' = liftM2 (+) score (frameScore frame)
+        output = (top, frameText final frame, mid final, scoreline, bot)
+        top        = "--+--+--+"
+        mid False  = "  +--+--+"  
+        mid True   = "--+--+--+"  
+        bot        = "--------+"
+        scoreline = case score' of
+          Nothing -> "        |"
+          Just x  -> printf "%8d|" x
+
+bowlWriter :: [Frame] -> Writer Output (Maybe Int)
+bowlWriter fs = foldM bowlFrame (Just 0) (zip (map (==10) [1..10]) fs')
+  where fs' = fs ++ repeat []
+        
+-- | Given a raw list of pin scores, output a display of the complete
+-- bowling display, as it might appear in an alley.
 --
--- >>> score [3,4,10,5,5,10,10,3] == 7 + 20 + 20 + 23 + 13 + 3
--- True
+-- >>> bowl [1,3,6,4,10,3,2,10,5,5,10,10,3,5,10,7,3]
+-- +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+-- |  | 1| 3|  | 6| /|  |  | X|  | 3| 2|  |  | X|  | 5| /|  |  | X|  |  | X|  | 3| 5| X| 7| /|
+-- |  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+--+--+--+
+-- |       4|      24|      39|      44|      64|      84|     107|     125|     133|     153|
+-- +--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
 
-score :: [Int] -> Int
-score = sum . map sum . toFrames
-
--- | Return a string of two lines. The first line is how the
--- individual rolls are marked, and the second line is a
--- comma-separated list of displayed frame scores. Note that partial
--- frame scores are not displayed.
---
--- >>> putStrLn $ showFrames [3,4,10,5,5,10,10,3]
--- 34 X5/ X X3 
--- [7,27,47,70]
-
-showFrames :: [Int] -> String
-showFrames xs = concatMap showFrame frames ++ "\n" ++ show scores
-  where scores = tail $ scanl (+) 0 $ map sum $ takeWhile completeFrame frames
-        frames = toFrames xs
-
+bowl :: [Int] -> IO ()
+bowl xs = do
+  putStrLn ('+' : a)
+  putStrLn ('|' : b)
+  putStrLn ('|' : c)
+  putStrLn ('|' : d)
+  putStrLn ('+' : e)
+  where (_, (a,b,c,d,e)) = runWriter (bowlWriter fs)
+        fs = toFrames $ toRolls xs
