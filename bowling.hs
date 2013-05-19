@@ -1,9 +1,11 @@
 
 module Bowling where
 
-import Control.Monad (liftM2, foldM)
+import Control.Applicative ((<*>), (<$>))
+import Control.Monad (foldM)
 import Control.Monad.Writer (Writer, runWriter, writer)
 import Data.Char (intToDigit)
+import Data.DList (DList, fromList, toList)
 import Text.Printf (printf)
 
 data Roll = Strike | Spare Int | One Int | Two Int deriving (Eq, Show)
@@ -20,12 +22,16 @@ toRolls xs = rs where rs = zipWith toRoll (Strike:rs) xs
 type Frame = [Roll]
 
 toFrames :: [Roll] -> [Frame]
-toFrames = go 1 where
-  go _ []               = []
-  go 10 rs              = [rs]
-  go n rs@(Strike:_)    = take 3 rs : go (n+1) (drop 1 rs)
-  go n rs@(_:Spare _:_) = take 3 rs : go (n+1) (drop 2 rs)
-  go n rs               = take 2 rs : go (n+1) (drop 2 rs)
+toFrames = go 1 
+  where
+    go _ []               = []
+    go 10 rs              = [rs]
+    go n rs               = take x rs : go (n+1) (drop y rs)
+      where 
+        (x, y) = case rs of
+          (Strike:_)    -> (3, 1)
+          (_:Spare _:_) -> (3, 2)
+          _             -> (2, 2)
 
 rollScore :: Roll -> Int
 rollScore Strike    = 10
@@ -33,11 +39,15 @@ rollScore (Spare x) = x
 rollScore (One x)   = x
 rollScore (Two x)   = x
 
+validFrame :: Frame -> Bool
+validFrame [Strike,_      ,_] = True
+validFrame [_     ,Spare _,_] = True
+validFrame [One _ ,Two _  ]   = True
+validFrame _ = False
+
 frameScore :: Frame -> Maybe Int
-frameScore rs@[Strike,_      ,_] = Just $ sum $ map rollScore rs
-frameScore rs@[_     ,Spare _,_] = Just $ sum $ map rollScore rs
-frameScore rs@[One _ ,Two _  ]   = Just $ sum $ map rollScore rs
-frameScore _                     = Nothing
+frameScore rs | validFrame rs = Just $ sum $ map rollScore rs
+              | otherwise     = Nothing
 
 pinChar :: Int -> Char
 pinChar 0 = '-'
@@ -55,16 +65,12 @@ frameText final rs = printf " %c| %c| %c|" a b c
   where (a:b:c:_) = if final then cs else ' ' : cs
         cs = map rollChar rs ++ repeat ' '
 
-type Output = (String, String, String, String, String)
+type Output = (DList Char, DList Char)
 
 bowlFrame :: (Maybe Int) -> (Bool, Frame) -> Writer Output (Maybe Int)
 bowlFrame score (final, frame) = writer (score', output)
-  where score' = liftM2 (+) score (frameScore frame)
-        output = (top, frameText final frame, mid final, scoreline, bot)
-        top        = "--+--+--+"
-        mid False  = "  +--+--+"  
-        mid True   = "--+--+--+"  
-        bot        = "--------+"
+  where score' = (+) <$> score <*> (frameScore frame)
+        output = ( fromList $ frameText final frame, fromList scoreline )
         scoreline = case score' of
           Nothing -> "        |"
           Just x  -> printf "%8d|" x
@@ -72,7 +78,7 @@ bowlFrame score (final, frame) = writer (score', output)
 bowlWriter :: [Frame] -> Writer Output (Maybe Int)
 bowlWriter fs = foldM bowlFrame (Just 0) (zip (map (==10) [1..10]) fs')
   where fs' = fs ++ repeat []
-        
+
 -- | Given a raw list of pin scores, output a display of the complete
 -- bowling display, as it might appear in an alley.
 --
@@ -84,11 +90,12 @@ bowlWriter fs = foldM bowlFrame (Just 0) (zip (map (==10) [1..10]) fs')
 -- +--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
 
 bowl :: [Int] -> IO ()
-bowl xs = do
-  putStrLn ('+' : a)
-  putStrLn ('|' : b)
-  putStrLn ('|' : c)
-  putStrLn ('|' : d)
-  putStrLn ('+' : e)
-  where (_, (a,b,c,d,e)) = runWriter (bowlWriter fs)
+bowl xs = putStr $ unlines 
+  [ '+' : concat (replicate 10 "--+--+--+")
+  , '|' : toList a
+  , '|' : concat (replicate  9 "  +--+--+") ++ "--+--+--+"
+  , '|' : toList b
+  , '+' : concat (replicate 10 "--------+")
+  ]
+  where (_, (a,b)) = runWriter (bowlWriter fs)
         fs = toFrames $ toRolls xs
