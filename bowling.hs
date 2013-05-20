@@ -21,17 +21,18 @@ toRolls xs = rs where rs = zipWith toRoll (Strike:rs) xs
                       
 type Frame = [Roll]
 
+frameTakeDrop :: [Roll] -> (Int, Int)
+frameTakeDrop (Strike:_)    = (3, 1)
+frameTakeDrop (_:Spare _:_) = (3, 2)
+frameTakeDrop _             = (2, 2)
+
 toFrames :: [Roll] -> [Frame]
 toFrames = go 1 
   where
     go _ []               = []
     go 10 rs              = [rs]
     go n rs               = take x rs : go (n+1) (drop y rs)
-      where 
-        (x, y) = case rs of
-          (Strike:_)    -> (3, 1)
-          (_:Spare _:_) -> (3, 2)
-          _             -> (2, 2)
+      where (x, y) = frameTakeDrop rs
 
 rollScore :: Roll -> Int
 rollScore Strike    = 10
@@ -70,10 +71,10 @@ type Output = (DList Char, DList Char)
 bowlFrame :: (Maybe Int) -> (Bool, Frame) -> Writer Output (Maybe Int)
 bowlFrame score (final, frame) = writer (score', output)
   where score' = (+) <$> score <*> (frameScore frame)
-        output = ( fromList $ frameText final frame, fromList scoreline )
-        scoreline = case score' of
-          Nothing -> "        |"
-          Just x  -> printf "%8d|" x
+        output = mapBoth fromList (frameText final frame, printScore score')
+        mapBoth f (a,b) = (f a, f b) -- why is this not already defined?
+        printScore Nothing  = "        |"
+        printScore (Just x) = printf "%8d|" x
 
 bowlWriter :: [Frame] -> Writer Output (Maybe Int)
 bowlWriter fs = foldM bowlFrame (Just 0) (zip (map (==10) [1..10]) fs')
@@ -82,20 +83,21 @@ bowlWriter fs = foldM bowlFrame (Just 0) (zip (map (==10) [1..10]) fs')
 -- | Given a raw list of pin scores, output a display of the complete
 -- bowling display, as it might appear in an alley.
 --
--- >>> bowl [1,3,6,4,10,3,2,10,5,5,10,10,3,5,10,7,3]
+-- >>> putStr $ bowl [1,3,6,4,10,3,2,10,5,5,10,10,3,5,10,7,3]
 -- +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 -- |  | 1| 3|  | 6| /|  |  | X|  | 3| 2|  |  | X|  | 5| /|  |  | X|  |  | X|  | 3| 5| X| 7| /|
 -- |  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+  +--+--+--+--+--+
 -- |       4|      24|      39|      44|      64|      84|     107|     125|     133|     153|
 -- +--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
 
-bowl :: [Int] -> IO ()
-bowl xs = putStr $ unlines 
+bowl :: [Int] -> String
+bowl xs = unlines 
   [ '+' : concat (replicate 10 "--+--+--+")
-  , '|' : toList a
+  , '|' : toList topline
   , '|' : concat (replicate  9 "  +--+--+") ++ "--+--+--+"
-  , '|' : toList b
+  , '|' : toList botline
   , '+' : concat (replicate 10 "--------+")
   ]
-  where (_, (a,b)) = runWriter (bowlWriter fs)
-        fs = toFrames $ toRolls xs
+  where 
+    (_, (topline, botline)) = runWriter.bowlWriter.toFrames.toRolls $ xs
+
